@@ -30,6 +30,7 @@ class Hexray():
         'ebp' : 0, 'ebp_r' : None,
         'esp' : 0, 'esp_r' : None,
     }
+    eflags = { 'zf' : 0 } # test eax, eax 처리를 위해서
 
     removed_canary = False # 더미 제거상태
     init_vars = False # 지역변수 선언상태
@@ -123,9 +124,9 @@ class Hexray():
 
 
     # 레지스터인지 판별하는 함수
-    def IsRegister(self, tester):
+    def IsRegister(self, reg):
         reg_list = ['eax', 'ebx', 'ecx', 'edx', 'edi', 'esi', 'ebp', 'esp']
-        if tester in reg_list:
+        if reg in reg_list:
             return True
         else:
             return False
@@ -174,13 +175,50 @@ class Hexray():
                         chunk += "var%d" % offset
                         self.var_accessed[offset] = True
 
-                
-                print "PushTest: " + str(push_address_str)
+                #print "PushTest: " + str(push_address_str)
                 
    
             address = PrevHead(address)
         chunk += ");"
         return self.add_sourcecode(chunk)
+
+    # al, ax 같은 1~2바이트 레지스터 값을 얻어오는 함수
+    def getRegisterValue(self, reg):
+        l_list = ['al', 'bl', 'cl', 'dl']
+        x_list = ['ax', 'bx', 'cx', 'dx']
+        reg_list = ['eax', 'ebx', 'ecx', 'edx', 'edi', 'esi', 'ebp', 'esp']
+        
+        if reg in l_list:
+            return self.registers['e'+reg[0:1]+'x'] & 0xFF
+        
+        if reg in x_list:
+            return self.registers['e'+reg[0:1]+'x'] & 0xFFFF
+
+        if reg in reg_list:
+            return self.registers[reg]
+
+        else:
+            print "getRegisterValue:: Unknown Register !!"
+            return None
+        
+
+    def childToParentRegister(self, reg):
+        l_list = ['al', 'bl', 'cl', 'dl']
+        x_list = ['ax', 'bx', 'cx', 'dx']
+        reg_list = ['eax', 'ebx', 'ecx', 'edx', 'edi', 'esi', 'ebp', 'esp']
+        
+        if reg in l_list:
+            return 'e'+reg[0:1]+'x'
+        
+        if reg in x_list:
+            return 'e'+reg[0:1]+'x'
+
+        if reg in reg_list:
+            return reg
+
+        else:
+            print "childToParentRegister:: Unknown Register !!"
+            return None
 
 
     # 소스코드 생성하는 부분 (재귀함수)
@@ -209,7 +247,6 @@ class Hexray():
             chunk += "}\n"
             return chunk
 
-
         if self.init_vars == False and self.var_size != 0:
             self.init_vars = True
 
@@ -220,25 +257,81 @@ class Hexray():
             chunk += "\n"
             chunk += self.hexray_opcodes(start, end)
             return chunk
-            
 
 
         # mov 처리
         if self.disas_list[start]['instruction'] == 'mov':
 
-            # 지역변수를 특정 값으로 설정 (나중에 참조안하는 변수들은 다 지울것)
+            # mov [ebp-0x??], ?? 처리
             if self.disas_list[start]['op_first'].find("[ebp") != -1:
                 offset = -self.disas_list[start]['op_first_value'] / 4
-                self.var_list[offset] = self.disas_list[start]['op_second_value']
+
+                if self.IsRegister(self.disas_list[start]['op_second']):
+                    # mov [ebp-0x??], 레지스터
+                    self.var_list[offset] = self.registers[self.disas_list[start]['op_second']]
+                else:
+                    # mov [ebp-0x??], 상수
+                    self.var_list[offset] = self.disas_list[start]['op_second_value']
                 
-                #참조한 변수는 TrueFlag설정
+                # 참조한 변수는 TrueFlag설정
                 self.var_accessed[offset] = True
                 
                 chunk += self.add_sourcecode("var%s = %d; //0x%x" % (offset, self.var_list[offset], self.var_list[offset] & 0xFFFFFFFF))
                 chunk += self.hexray_opcodes(NextHead(start), end)
                 return chunk
 
-        # sub 처리
+            # mov eax, [ebp-0x??] 같은거 처리
+            elif self.disas_list[start]['op_second'].find("[ebp") != -1:
+                offset = -self.disas_list[start]['op_second_value'] / 4
+                target_register = self.disas_list[start]['op_first']
+                self.registers[target_register] = self.var_list[offset]
+
+                chunk += self.hexray_opcodes(NextHead(start), end)
+                return chunk
+
+            # mov eax, ecx 같은거 처리
+            elif self.IsRegister(self.disas_list[start]['op_second']):
+                target_register = self.disas_list[start]['op_first']
+                victim_register = self.disas_list[start]['op_second']
+
+                self.registers[target_register] = self.registers[victim_register]
+                self.registers[target_register + "_r"] = None
+                chunk += self.hexray_opcodes(NextHead(start), end)
+                return chunk
+            else:
+                print "Unknown Mov:: %s" % self.disas_list[start]['disas']
+
+        # not 처리
+        if self.disas_list[start]['instruction'] == 'not':
+            target_register = self.disas_list[start]['op_first']
+            self.registers[target_register] = ~self.registers[target_register]
+            chunk += self.hexray_opcodes(NextHead(start), end)
+            return chunk
+
+        # test 처리
+        if self.disas_list[start]['instruction'] == 'test':
+            target_register = self.disas_list[start]['op_first']
+            victim_register = self.disas_list[start]['op_second']
+            if target_register == victim_register:
+                if self.registers[target_register] != 0:
+                    self.eflags['zf'] = 1
+                else:
+                    self.eflags['zf'] = 0
+            else:
+                print "Unknown test:: %s" % self.disas_list[start]['disas']
+            chunk += self.hexray_opcodes(NextHead(start), end)
+            return chunk
+
+        # setz 처리
+        if self.disas_list[start]['instruction'] == 'setz':
+            target_register = self.childToParentRegister(self.disas_list[start]['op_first'])
+            self.registers[target_register] = self.eflags['zf']
+            
+            chunk += self.hexray_opcodes(NextHead(start), end)
+            return chunk
+
+            
+        # sub 처리(함수 처리용)
         if self.init_vars == True and self.disas_list[start]['instruction'] == 'sub':
             # sub esp, XX(sub_esp_value)가 들어오면 함수 시작
             sub_esp_value = self.disas_list[start]['op_second_value']
@@ -294,6 +387,7 @@ class Hexray():
                 self.registers[victim_register]
                 #print "add:: %s register to %d" % (target_register, self.registers[target_register])
             else:
+                # 레지스터에 상수 더하기
                 self.registers[target_register] += self.disas_list[start]['op_second_value']
                 #print "add:: %s register to %d" % (target_register, self.disas_list[start]['op_second_value'])
 
