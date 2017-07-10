@@ -4,6 +4,7 @@
 from idaapi import *
 from idautils import *
 import re
+import json
 
 
 # 버퍼를 파일로 출력
@@ -18,21 +19,22 @@ class Hexray():
     disas_list = {}
     var_size = 0
     var_list = []
+    var_accessed = [] # True or False
     registers = {
-        'eax' : 0,
-        'ebx' : 0,
-        'ecx' : 0,
-        'edx' : 0,
-        'edi' : 0,
-        'esi' : 0,
-        'ebp' : 0,
-        'esp' : 0
+        'eax' : 0, 'eax_r' : None,
+        'ebx' : 0, 'ebx_r' : None,
+        'ecx' : 0, 'ecx_r' : None,
+        'edx' : 0, 'edx_r' : None,
+        'edi' : 0, 'edi_r' : None,
+        'esi' : 0, 'esi_r' : None,
+        'ebp' : 0, 'ebp_r' : None,
+        'esp' : 0, 'esp_r' : None,
     }
 
     removed_canary = False # 더미 제거상태
     init_vars = False # 지역변수 선언상태
     func_is_main = False # 일반 함수와 main함수의 구조가 약간 다르니까 이 플래그로 나중에 더미제거할 때 예외처리
-    indent = 0 # 주석
+    indent = 0 # 들여쓰기
     funcName = ""
     
     # 주소를 넘겨주면 해당 커서 영역을 Hex-ray하기위한 초기화를 진행
@@ -57,7 +59,7 @@ class Hexray():
 
 
     # 문자열을 파싱하여 주어진 두 문자열 사이에 있는 문자열을 반환
-    def parseString(f, l, data):
+    def parseString(self, f, l, data):
         key = re.search(re.escape(f) + '(.*?)' + re.escape(l), data)
         if key == None:
             return None
@@ -100,6 +102,7 @@ class Hexray():
                 size = 0
                 while size < self.var_size:
                     self.var_list.append(0) # 변수를 0으로 초기화
+                    self.var_accessed.append(False)
                     size += 4
             
             if (self.disas_list[address]['instruction'] == 'xor' and
@@ -118,16 +121,66 @@ class Hexray():
         chunk += "\n"
         return chunk
 
+
+    # 레지스터인지 판별하는 함수
+    def IsRegister(self, tester):
+        reg_list = ['eax', 'ebx', 'ecx', 'edx', 'edi', 'esi', 'ebp', 'esp']
+        if tester in reg_list:
+            return True
+        else:
+            return False
+
     # 함수 처리
+    # parameter_count가 당장은 필요없지만 push로 전달을 안할수도 있으니까
+    # 장기적으로 보면 필요함!!
     def handler_function(self, start, end, parameter_count):
         chunk = ""
 
-        address = start
-        while address < end:
-            print "FUNC:: " + self.disas_list[address]['disas']
-            address = NextHead(address)
+
+        # 역순으로 읽어나가면서 Call 구문 생성
+        # 처음 end가 가리키는건 add esp, XX이므로 Prev해줌
+
+
+        function_name = self.disas_list[end]['op_first']
+        chunk += function_name + "("
         
-        return chunk
+        address = PrevHead(end)
+        while address >= start:
+            if self.disas_list[address]['instruction'] == 'push':
+                parameter_count -= 1
+                push_address = self.disas_list[address]['op_first_value']
+                push_string = GetString(push_address)
+                push_address_str = self.disas_list[address]['op_first']
+                
+                # String 탐지
+                if push_string != None:
+                    push_string = json.dumps(push_string).strip('"')
+                    chunk += '"' + push_string + '"';
+                    
+                    if parameter_count != 0:
+                        chunk += ', ';
+
+                # 지역변수 푸시
+                elif push_address_str.find("[ebp") != -1:
+                    offset = -self.disas_list[address]['op_first_value'] / 4
+                    chunk += "var%d" % offset
+
+                # 레지스터 푸시
+                elif self.IsRegister(push_address_str):
+                    # 지역변수
+                    if self.registers[push_address_str+"_r"] == 'ebp':
+                        offset = -self.registers[push_address_str] / 4
+                        print "offset is %d " % offset
+                        chunk += "var%d" % offset
+                        self.var_accessed[offset] = True
+
+                
+                print "PushTest: " + str(push_address_str)
+                
+   
+            address = PrevHead(address)
+        chunk += ");"
+        return self.add_sourcecode(chunk)
 
 
     # 소스코드 생성하는 부분 (재귀함수)
@@ -173,10 +226,14 @@ class Hexray():
         # mov 처리
         if self.disas_list[start]['instruction'] == 'mov':
 
-            # 지역변수를 특정 값으로 설정
+            # 지역변수를 특정 값으로 설정 (나중에 참조안하는 변수들은 다 지울것)
             if self.disas_list[start]['op_first'].find("[ebp") != -1:
                 offset = -self.disas_list[start]['op_first_value'] / 4
                 self.var_list[offset] = self.disas_list[start]['op_second_value']
+                
+                #참조한 변수는 TrueFlag설정
+                self.var_accessed[offset] = True
+                
                 chunk += self.add_sourcecode("var%s = %d; //0x%x" % (offset, self.var_list[offset], self.var_list[offset] & 0xFFFFFFFF))
                 chunk += self.hexray_opcodes(NextHead(start), end)
                 return chunk
@@ -194,22 +251,58 @@ class Hexray():
                     break
                 
                 start = NextHead(start)
+
+            # func_start_address를 push가 나타날 때 까지 뒤로 더 땡긴다
+            original_func_start_address = func_start_address
+            while 1:
+                if self.disas_list[func_start_address]['instruction'] == 'push':
+                    break
+
+                func_start_address = NextHead(func_start_address)
+
+            chunk += self.hexray_opcodes(original_func_start_address, func_start_address)
             
             add_esp_value = self.disas_list[start]['op_second_value']
-            func_end_address = start
+            func_end_address = PrevHead(start)
 
             # 이렇게하면 파라미터 갯수가 나옴!
             parameter_count = (add_esp_value - sub_esp_value) / 4
             chunk += self.handler_function(func_start_address, func_end_address, parameter_count)
-            start = func_end_address
             chunk += self.hexray_opcodes(NextHead(start), end)
             return chunk
-                
-            
-        # print "wow is " + str(self.disas_list[start]['op_first'])
-            
 
-        # 어셈블리 출력
+        # lea 처리
+        if self.disas_list[start]['instruction'] == 'lea':
+            target_register = self.disas_list[start]['op_first']
+            victim_register = self.disas_list[start]['op_second'][1:4]
+            #print "victim_register is %s" % victim_register
+
+            # 레지스터 변수 설정
+            self.registers[target_register] = self.disas_list[start]['op_second_value']
+            self.registers[target_register + "_r"] = victim_register
+            #print "lea:: %s register to %d" % (target_register, self.disas_list[start]['op_second_value'])
+            chunk += self.hexray_opcodes(NextHead(start), end)
+            return chunk
+
+        # add 처리
+        if self.disas_list[start]['instruction'] == 'add':
+            target_register = self.disas_list[start]['op_first']
+            victim_register = self.disas_list[start]['op_second']
+            
+            if self.IsRegister(victim_register):
+                # 레지스터끼리 더하는 연산
+                self.registers[victim_register]
+                #print "add:: %s register to %d" % (target_register, self.registers[target_register])
+            else:
+                self.registers[target_register] += self.disas_list[start]['op_second_value']
+                #print "add:: %s register to %d" % (target_register, self.disas_list[start]['op_second_value'])
+
+
+            chunk += self.hexray_opcodes(NextHead(start), end)
+            return chunk
+        
+
+        # 남은 어셈블리 출력
         print self.disas_list[start]['disas']
 
         if self.init_vars == True:
