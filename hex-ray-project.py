@@ -96,8 +96,8 @@ class Hexray():
             # sub esp, 0x?? -> 지역변수 크기를 얻어옴
             if (self.disas_list[address]['instruction'] == 'sub' and
                 self.disas_list[address]['op_first'] == 'esp'):
-                self.var_size = self.disas_list[address]['op_second_value']
-                size = 4
+                self.var_size = self.disas_list[address]['op_second_value'] + 8
+                size = 0
                 while size < self.var_size:
                     self.var_list.append(0) # 변수를 0으로 초기화
                     size += 4
@@ -116,6 +116,17 @@ class Hexray():
             chunk += "    "
         chunk += buf
         chunk += "\n"
+        return chunk
+
+    # 함수 처리
+    def handler_function(self, start, end, parameter_count):
+        chunk = ""
+
+        address = start
+        while address < end:
+            print "FUNC:: " + self.disas_list[address]['disas']
+            address = NextHead(address)
+        
         return chunk
 
 
@@ -152,12 +163,51 @@ class Hexray():
             s = 0
             for _ in self.var_list:
                 s += 1
-                chunk += self.add_sourcecode("int var%s; //[bp-0x%02x]" % (s, (s + 1) * 4))
+                chunk += self.add_sourcecode("int var%s; //[bp-0x%02x]" % (s, s * 4))
             chunk += "\n"
             chunk += self.hexray_opcodes(start, end)
             return chunk
             
 
+
+        # mov 처리
+        if self.disas_list[start]['instruction'] == 'mov':
+
+            # 지역변수를 특정 값으로 설정
+            if self.disas_list[start]['op_first'].find("[ebp") != -1:
+                offset = -self.disas_list[start]['op_first_value'] / 4
+                self.var_list[offset] = self.disas_list[start]['op_second_value']
+                chunk += self.add_sourcecode("var%s = %d; //0x%x" % (offset, self.var_list[offset], self.var_list[offset] & 0xFFFFFFFF))
+                chunk += self.hexray_opcodes(NextHead(start), end)
+                return chunk
+
+        # sub 처리
+        if self.init_vars == True and self.disas_list[start]['instruction'] == 'sub':
+            # sub esp, XX(sub_esp_value)가 들어오면 함수 시작
+            sub_esp_value = self.disas_list[start]['op_second_value']
+            start = NextHead(start)
+            
+            func_start_address = start
+            while 1:
+                if (self.disas_list[start]['instruction'] == 'add' and
+                    self.disas_list[start]['op_first'] == 'esp'):
+                    break
+                
+                start = NextHead(start)
+            
+            add_esp_value = self.disas_list[start]['op_second_value']
+            func_end_address = start
+
+            # 이렇게하면 파라미터 갯수가 나옴!
+            parameter_count = (add_esp_value - sub_esp_value) / 4
+            chunk += self.handler_function(func_start_address, func_end_address, parameter_count)
+            start = func_end_address
+            chunk += self.hexray_opcodes(NextHead(start), end)
+            return chunk
+                
+            
+        # print "wow is " + str(self.disas_list[start]['op_first'])
+            
 
         # 어셈블리 출력
         print self.disas_list[start]['disas']
