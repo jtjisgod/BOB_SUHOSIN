@@ -18,6 +18,17 @@ class Hexray():
     disas_list = {}
     var_size = 0
     var_list = []
+    registers = {
+        'eax' : 0,
+        'ebx' : 0,
+        'ecx' : 0,
+        'edx' : 0,
+        'edi' : 0,
+        'esi' : 0,
+        'ebp' : 0,
+        'esp' : 0
+    }
+
     removed_canary = False # 더미 제거상태
     init_vars = False # 지역변수 선언상태
     func_is_main = False # 일반 함수와 main함수의 구조가 약간 다르니까 이 플래그로 나중에 더미제거할 때 예외처리
@@ -86,9 +97,9 @@ class Hexray():
             if (self.disas_list[address]['instruction'] == 'sub' and
                 self.disas_list[address]['op_first'] == 'esp'):
                 self.var_size = self.disas_list[address]['op_second_value']
-                size = 4 # ebp-4는 변수에서 제외
+                size = 4
                 while size < self.var_size:
-                    self.var_list.append(size / 4)
+                    self.var_list.append(0) # 변수를 0으로 초기화
                     size += 4
             
             if (self.disas_list[address]['instruction'] == 'xor' and
@@ -106,7 +117,7 @@ class Hexray():
         chunk += buf
         chunk += "\n"
         return chunk
-        
+
 
     # 소스코드 생성하는 부분 (재귀함수)
     def hexray_opcodes(self, start, end):
@@ -138,10 +149,14 @@ class Hexray():
         if self.init_vars == False and self.var_size != 0:
             self.init_vars = True
 
-            for x in self.var_list:
-                chunk += self.add_sourcecode("int var%s; //[bp-0x%x]" % (x, (x + 1) * 4))
+            s = 0
+            for _ in self.var_list:
+                s += 1
+                chunk += self.add_sourcecode("int var%s; //[bp-0x%02x]" % (s, (s + 1) * 4))
             chunk += "\n"
+            chunk += self.hexray_opcodes(start, end)
             return chunk
+            
 
 
         # 어셈블리 출력
