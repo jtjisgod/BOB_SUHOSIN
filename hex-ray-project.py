@@ -460,7 +460,7 @@ class Hexray():
                 offset = -self.disas_list[start]['op_first_value'] / 4
 
                 if self.IsRegister(self.disas_list[start]['op_second']):
-                    # mov [ebp-0x??], 레지스터
+                    # xor [ebp-0x??], 레지스터
                     victim_register = self.disas_list[start]['op_second']
                     if self.registers[victim_register + "_r"] == 'ebp':
                         offset2 = -self.registers[victim_register] / 4
