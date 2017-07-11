@@ -298,6 +298,18 @@ class Hexray():
                 self.registers[target_register + "_r"] = None
                 chunk += self.hexray_opcodes(NextHead(start), end)
                 return chunk
+
+            # mov eax, 상수 같은거 처리
+            elif self.disas_list[start]['op_second'] == str(self.disas_list[start]['op_second_value']):
+                target_register = self.disas_list[start]['op_first']
+
+                self.registers[target_register] = self.disas_list[start]['op_second_value']
+                self.registers[target_register + "_r"] = None
+                chunk += self.hexray_opcodes(NextHead(start), end)
+                return chunk
+
+
+            
             else:
                 print "Unknown Mov:: %s" % self.disas_list[start]['disas']
 
@@ -368,6 +380,13 @@ class Hexray():
         if self.disas_list[start]['instruction'] == 'lea':
             target_register = self.disas_list[start]['op_first']
             victim_register = self.disas_list[start]['op_second'][1:4]
+            if victim_register != 'ebp' and self.registers[victim_register + "_r"] == 'ebp':
+                self.registers[target_register] = self.registers[victim_register] + self.disas_list[start]['op_second_value']
+                self.registers[target_register + "_r"] = 'ebp'
+                chunk += self.hexray_opcodes(NextHead(start), end)
+                return chunk
+
+            
             #print "victim_register is %s" % victim_register
 
             # 레지스터 변수 설정
