@@ -19,7 +19,6 @@ class Hexray():
     disas_list = {}
     var_size = 0
     var_list = []
-    var_accessed = [] # True or False
     registers = {
         'eax' : 0, 'eax_r' : None,
         'ebx' : 0, 'ebx_r' : None,
@@ -80,6 +79,30 @@ class Hexray():
             t -= 4294967296
         return t
 
+    # Remove unused vars !!
+    def optimize(self):
+        cnt = len(self.var_list)
+        del_list = []
+        for i in range(0, cnt):
+            if self.source_code.count("var%d_" % (i + 1)) <= 1:
+                del_list.append(i + 1)
+
+        ss = self.source_code.split("\n")
+        source_code = ""
+        for x in ss:
+            removeFlag = False
+            for i in del_list:
+                if x.find("var%d_;" % i) != -1:
+                    removeFlag = True
+                    break
+            if removeFlag == False:
+                source_code += x + "\n"
+        self.source_code = source_code
+        return
+        
+
+
+
     # 마지막 더미 제거: mov ???, [ebp-0x0C] --> ???는 eax이거나 ecx일듯
     def getLastCanary(self, lastCanaryAddress):
         address = PrevHead(lastCanaryAddress)
@@ -103,7 +126,6 @@ class Hexray():
                 size = 0
                 while size < self.var_size:
                     self.var_list.append(0) # 변수를 0으로 초기화
-                    self.var_accessed.append(False)
                     size += 4
             
             if (self.disas_list[address]['instruction'] == 'xor' and
@@ -164,18 +186,16 @@ class Hexray():
                 # 지역변수 푸시
                 elif push_address_str.find("[ebp") != -1:
                     offset = -self.disas_list[address]['op_first_value'] / 4
-                    chunk += "var%d" % offset
+                    chunk += "var%d_" % offset
 
                 # 레지스터 푸시
                 elif self.IsRegister(push_address_str):
                     # 지역변수
                     if self.registers[push_address_str+"_r"] == 'ebp':
+                        if function_name.find("scanf") != -1:
+                            chunk += "&"
                         offset = -self.registers[push_address_str] / 4
-                        print "offset is %d " % offset
-                        chunk += "var%d" % offset
-                        self.var_accessed[offset] = True
-
-                #print "PushTest: " + str(push_address_str)
+                        chunk += "var%d_" % offset
                 
    
             address = PrevHead(address)
@@ -253,7 +273,7 @@ class Hexray():
             s = 0
             for _ in self.var_list:
                 s += 1
-                chunk += self.add_sourcecode("int var%s; //[bp-0x%02x]" % (s, s * 4))
+                chunk += self.add_sourcecode("int var%s_; //[bp-0x%02x]" % (s, s * 4))
             chunk += "\n"
             chunk += self.hexray_opcodes(start, end)
             return chunk
@@ -268,23 +288,27 @@ class Hexray():
 
                 if self.IsRegister(self.disas_list[start]['op_second']):
                     # mov [ebp-0x??], 레지스터
-                    self.var_list[offset] = self.registers[self.disas_list[start]['op_second']]
+                    victim_register = self.disas_list[start]['op_second']
+                    if self.registers[victim_register + "_r"] == 'ebp':
+                        offset2 = -self.registers[victim_register] / 4
+                        chunk += self.add_sourcecode("var%s_ = &var%s_;" % (offset, offset2))
+                        chunk += self.hexray_opcodes(NextHead(start), end)
+                        return chunk
+                    
+                    self.var_list[offset] = self.registers[victim_register]
                 else:
                     # mov [ebp-0x??], 상수
                     self.var_list[offset] = self.disas_list[start]['op_second_value']
                 
-                # 참조한 변수는 TrueFlag설정
-                self.var_accessed[offset] = True
-                
-                chunk += self.add_sourcecode("var%s = %d; //0x%x" % (offset, self.var_list[offset], self.var_list[offset] & 0xFFFFFFFF))
+                chunk += self.add_sourcecode("var%s_ = %d; //0x%x" % (offset, self.var_list[offset], self.var_list[offset] & 0xFFFFFFFF))
                 chunk += self.hexray_opcodes(NextHead(start), end)
                 return chunk
 
             # mov eax, [ebp-0x??] 같은거 처리
             elif self.disas_list[start]['op_second'].find("[ebp") != -1:
-                offset = -self.disas_list[start]['op_second_value'] / 4
                 target_register = self.disas_list[start]['op_first']
-                self.registers[target_register] = self.var_list[offset]
+                self.registers[target_register] = self.disas_list[start]['op_second_value']
+                self.registers[target_register+"_r"] = 'ebp'
 
                 chunk += self.hexray_opcodes(NextHead(start), end)
                 return chunk
@@ -299,14 +323,18 @@ class Hexray():
                 chunk += self.hexray_opcodes(NextHead(start), end)
                 return chunk
 
+            # mov eax, [eax]
             elif self.disas_list[start]['op_second'][0:1] == '[' and self.disas_list[start]['op_second'][4:5] == ']':
                 target_register = self.disas_list[start]['op_first']
                 victim_register = self.disas_list[start]['op_second'][1:4]
-                
-                print self.registers[victim_register+"_r"]
-                print self.registers[victim_register]
-                chunk += self.hexray_opcodes(NextHead(start), end)
-                return chunk
+
+                if (self.registers[victim_register+"_r"] == 'ebp'):
+                    
+                    offset = -self.registers[victim_register]
+                    offset = offset / 4
+
+                    chunk += self.hexray_opcodes(NextHead(start), end)
+                    return chunk
 
             # mov eax, 상수 같은거 처리
             elif self.disas_list[start]['op_second'] == str(self.disas_list[start]['op_second_value']):
@@ -316,16 +344,16 @@ class Hexray():
                 self.registers[target_register + "_r"] = None
                 chunk += self.hexray_opcodes(NextHead(start), end)
                 return chunk
-
-
-            
             else:
                 print "Unknown Mov:: %s" % self.disas_list[start]['disas']
 
         # not 처리
         if self.disas_list[start]['instruction'] == 'not':
             target_register = self.disas_list[start]['op_first']
-            self.registers[target_register] = ~self.registers[target_register]
+            offset = -self.registers[target_register]
+            offset = offset / 4
+            
+            chunk += self.add_sourcecode("var%s_ = ~var%s_;" % (offset, offset))
             chunk += self.hexray_opcodes(NextHead(start), end)
             return chunk
 
@@ -335,9 +363,9 @@ class Hexray():
             victim_register = self.disas_list[start]['op_second']
             if target_register == victim_register:
                 if self.registers[target_register] != 0:
-                    self.eflags['zf'] = 1
-                else:
                     self.eflags['zf'] = 0
+                else:
+                    self.eflags['zf'] = 1
             else:
                 print "Unknown test:: %s" % self.disas_list[start]['disas']
             chunk += self.hexray_opcodes(NextHead(start), end)
@@ -423,7 +451,57 @@ class Hexray():
 
             chunk += self.hexray_opcodes(NextHead(start), end)
             return chunk
-        
+
+        # xor 처리
+        elif self.disas_list[start]['instruction'] == 'xor':
+
+            # xor [ebp-0x??], ?? 처리
+            if self.disas_list[start]['op_first'].find("[ebp") != -1:
+                offset = -self.disas_list[start]['op_first_value'] / 4
+
+                if self.IsRegister(self.disas_list[start]['op_second']):
+                    # mov [ebp-0x??], 레지스터
+                    victim_register = self.disas_list[start]['op_second']
+                    if self.registers[victim_register + "_r"] == 'ebp':
+                        offset2 = -self.registers[victim_register] / 4
+                        chunk += self.add_sourcecode("var%s_ ^= var%s_;" % (offset, offset2))
+                        chunk += self.hexray_opcodes(NextHead(start), end)
+                        return chunk
+
+            
+            elif (self.IsRegister(self.disas_list[start]['op_first']) and
+                self.IsRegister(self.disas_list[start]['op_second'])):
+                # xor 레지스터, 레지스터
+                target_register = self.disas_list[start]['op_first']
+                victim_register = self.disas_list[start]['op_second']
+
+                offset1 = -self.registers[target_register] / 4
+                offset2 = -self.registers[victim_register] / 4
+
+                second = self.registers[victim_register]
+                chunk += self.add_sourcecode("var%d_ ^= var%d_;" % (offset1, offset2));
+                chunk += self.hexray_opcodes(NextHead(start), end)
+                return chunk
+
+            
+
+        # or 처리
+        elif self.disas_list[start]['instruction'] == 'or':
+            if (self.IsRegister(self.disas_list[start]['op_first']) and
+                self.IsRegister(self.disas_list[start]['op_second'])):
+                # or 레지스터, 레지스터
+                target_register = self.disas_list[start]['op_first']
+                victim_register = self.disas_list[start]['op_second']
+
+                offset1 = -self.registers[target_register] / 4
+                offset2 = -self.registers[victim_register] / 4
+
+                second = self.registers[victim_register]
+                chunk += self.add_sourcecode("var%d_ |= var%d_;" % (offset1, offset2));
+                chunk += self.hexray_opcodes(NextHead(start), end)
+                return chunk
+
+
 
         # 남은 어셈블리 출력
         print self.disas_list[start]['disas']
@@ -462,6 +540,7 @@ class Hexray():
 
         
         self.source_code = self.hexray_opcodes(self.hexrayStartAddrss, self.hexrayEndAddrss)
+        self.optimize()
         return self.source_code
 
 
@@ -471,6 +550,7 @@ targetAddress = ScreenEA() # 현재 커서주소 반환
 hr = Hexray(targetAddress)
 
 source_code = hr.disassembly()
+
 createFile("hexray.txt", source_code)
 
 
