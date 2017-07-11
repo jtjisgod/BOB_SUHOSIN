@@ -150,7 +150,12 @@ class Hexray():
                 else : chunk += "" + self.disas_list[start]['op_first'].strip("]").split("+")[1] + " = " + self.disas_list[start]['op_second'] + ";\n"
                 chunk += self.hexray_opcodes(NextHead(start), end)
                 return chunk
-            else : self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['op_second']
+            else :
+                if "offset" in self.disas_list[start]['op_second'] :
+                    self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['disas'].split(";")[1]
+                else :
+                    self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['op_second']
+
 
         if self.disas_list[start]['instruction'] == "sub" :
             if self.disas_list[start]['op_second'][-1] == "h" : self.disas_list[start]['op_second'] = self.disas_list[start]['op_second'][0:-1]
@@ -178,6 +183,8 @@ class Hexray():
                         argu[i] = j
 
             if fname == "_printf" :
+                sAddr = 111111
+                # GetString(sAddr)
                 chunk += fname + "(" + argu[0] + ", " + argu[1] + ");" + "\n"
             else :
                 paramCount = getParam(fname)
@@ -190,8 +197,6 @@ class Hexray():
                 self.registers['eax'] = fname + "(" + ",".join(v) + ")"
             chunk += self.hexray_opcodes(NextHead(start), end)
             return chunk
-
-
 
 
 
