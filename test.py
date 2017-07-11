@@ -104,14 +104,17 @@ class Hexray():
     def hexray_opcodes(self, start, end):
         chunk = ""
         if start == end:
-            chunk += "return " + self.registers['eax'].split("+")[1].split("]")[0] + ";\n"
+            try :
+                chunk += "return " + self.registers['eax'].split("+")[1].split("]")[0] + ";\n"
+            except :
+                chunk += "return " + self.registers['eax'] + ";\n"
             return chunk
 
         if self.removed_canary == False:
             self.removed_canary = True
 
             firstCanary = NextHead(NextHead(start))
-            lastCanary = PrevHead(PrevHead(PrevHead(end)))
+            lastCanary = PrevHead(PrevHead(end))
             self.indent += 1
 
             self.funcName = GetFunctionName(self.hexrayStartAddrss)
@@ -140,7 +143,7 @@ class Hexray():
 
         if self.disas_list[start]['instruction'] == "mov" :
             self.movCount += 1
-            if self.movCount <= len(getParam(self.funcName)) :
+            if self.funcName != "main" and self.movCount <= len(getParam(self.funcName)) :
                 pass
             else :
                 if self.disas_list[start]['op_second'] in self.registers.keys() : # key가 있다면
@@ -160,7 +163,11 @@ class Hexray():
                         self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['disas'].split(";")[1]
                     else :
                         if type(self.registers[self.disas_list[start]['op_first']]) is str and self.registers[self.disas_list[start]['op_first']][0] == "[" :
-                            chunk += self.registers[self.disas_list[start]['op_first']].split("+")[1].split("]")[0] + " = " + self.registers[self.disas_list[start]['op_first']].split("+")[1].split("]")[0] + " + " + self.disas_list[start]['op_second'].split("+")[1].split("]")[0] + ";\n"
+                            try :
+                                chunk += self.registers[self.disas_list[start]['op_first']].split("+")[1].split("]")[0] + " = " + self.registers[self.disas_list[start]['op_first']].split("+")[1].split("]")[0] + " + " + self.disas_list[start]['op_second'].split("+")[1].split("]")[0] + ";\n"
+                            except :
+                                pass
+                            self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['op_second']
                             chunk += self.hexray_opcodes(NextHead(start), end)
                             return chunk
                         self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['op_second']
@@ -181,8 +188,12 @@ class Hexray():
             self.registers[self.disas_list[start]['op_first']] = self.registers.get(self.disas_list[start]['op_first'], 0) - int(self.disas_list[start]['op_second'])
 
         if self.disas_list[start]['instruction'] == "add" :
-            if self.disas_list[start]['op_second'][-1] == "h" : self.disas_list[start]['op_second'] = self.disas_list[start]['op_second'][0:-1]
-            self.registers[self.disas_list[start]['op_first']] = self.registers.get(self.disas_list[start]['op_first'], 0) + int(self.disas_list[start]['op_second'])
+            # print self.disas_list[start]['op_first'], self.disas_list[start]['op_second']
+            if self.disas_list[start]['op_first'] in self.registers.keys() and self.disas_list[start]['op_second'] in self.registers.keys():
+                self.registers[self.disas_list[start]['op_first']] = self.registers[self.disas_list[start]['op_second']]
+            else :
+                if self.disas_list[start]['op_second'][-1] == "h" : self.disas_list[start]['op_second'] = self.disas_list[start]['op_second'][0:-1]
+                self.registers[self.disas_list[start]['op_first']] = self.registers.get(self.disas_list[start]['op_first'], 0) + int(self.disas_list[start]['op_second'])
 
         if self.disas_list[start]['instruction'] == "call" :
             fname = self.disas_list[start]['op_first']
@@ -254,6 +265,10 @@ class Hexray():
 
 
         self.source_code = self.hexray_opcodes(self.hexrayStartAddrss, self.hexrayEndAddrss)
+        # try :
+        #     self.source_code = self.hexray_opcodes(self.hexrayStartAddrss, self.hexrayEndAddrss)
+        # except :
+        #     print self.registers
 
         print self.registers
 
