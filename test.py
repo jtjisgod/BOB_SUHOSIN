@@ -117,8 +117,7 @@ class Hexray():
                 self.func_is_main = True
                 main_parameter = "int argc, const char **argv, const char **envp"
             else:
-
-                main_parameter = ""
+                main_parameter = ", ".join(getParam(self.funcName))
                 True # 파라미터 [ebp+XX] 계산하는거 추가해야함
 
             chunk += "int %s(%s)\n" % (self.funcName, main_parameter)
@@ -187,7 +186,7 @@ class Hexray():
                 # GetString(sAddr)
                 chunk += fname + "(" + argu[0] + ", " + argu[1] + ");" + "\n"
             else :
-                paramCount = getParam(fname)
+                paramCount = len(getParam(fname))
                 v = []
                 print "JTJ"
                 for i in range(0, paramCount) :
@@ -277,17 +276,19 @@ def getParam(fname) :
     flag = False
     param = 0
     chk = 0
+    args = []
     for k, v in disas_list.items() :
         chk += 1
         if chk == 1 : continue
         elif chk == 2 : continue
         if v['instruction'] == "mov" and v['op_first'][0:5] == "[rbp+":
             param += 1
+            args.append("int " + v['op_first'].split("+")[1].split("]")[0])
             flag = True
         elif flag == True :
             break
 
-    return param
+    return args
 
 # int32로 변환 (야매인데 잘됨)
 def unsigned2signed(t):

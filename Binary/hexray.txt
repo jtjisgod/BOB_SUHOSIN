@@ -1,6 +1,6 @@
-int main(int argc, const char **argv, const char **envp)
+int foo(int var_4, int var_8, int var_C)
 {
-int var_4 = 1;
-var_4 = foo(1,2,3);
-_printf( "%d\n", var_4);
+int var_4 = 0;
+int var_8 = 0;
+int var_C = 0;
 }
