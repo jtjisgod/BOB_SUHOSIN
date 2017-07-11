@@ -14,6 +14,7 @@ def createFile(fileName, source_code):
     return
 
 class Hexray():
+    movCount = 0
     source_code = ""
     disas_list = {}
     var_size = 0
@@ -103,6 +104,7 @@ class Hexray():
     def hexray_opcodes(self, start, end):
         chunk = ""
         if start == end:
+            chunk += "return " + self.registers['eax'].split("+")[1].split("]")[0] + ";\n"
             return chunk
 
         if self.removed_canary == False:
@@ -137,23 +139,41 @@ class Hexray():
             return chunk
 
         if self.disas_list[start]['instruction'] == "mov" :
-
-            if self.disas_list[start]['op_second'] in self.registers.keys() : # key가 있다면
-                self.disas_list[start]['op_second'] = self.registers[self.disas_list[start]['op_second']]
-            # 지역 변수 부분
-            if self.disas_list[start]['op_first'][0:5] == "[rbp+" :
-                print self.disas_list[start]['op_first']
-                if self.disas_list[start]['op_first'].strip("]").split("+")[1] not in self.var_list :
-                    self.var_list.append(self.disas_list[start]['op_first'].strip("]").split("+")[1])
-                    chunk += "int " + str(self.disas_list[start]['op_first'].strip("]").split("+")[1]) + " = " + str(self.disas_list[start]['op_second']) + ";\n"
-                else : chunk += "" + self.disas_list[start]['op_first'].strip("]").split("+")[1] + " = " + self.disas_list[start]['op_second'] + ";\n"
-                chunk += self.hexray_opcodes(NextHead(start), end)
-                return chunk
+            self.movCount += 1
+            if self.movCount <= len(getParam(self.funcName)) :
+                pass
             else :
-                if "offset" in self.disas_list[start]['op_second'] :
-                    self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['disas'].split(";")[1]
+                if self.disas_list[start]['op_second'] in self.registers.keys() : # key가 있다면
+                    self.disas_list[start]['op_second'] = self.registers[self.disas_list[start]['op_second']]
+
+                # 지역 변수 부분
+                if self.disas_list[start]['op_first'][0:5] == "[rbp+" :
+                    print self.disas_list[start]['op_first']
+                    if self.disas_list[start]['op_first'].strip("]").split("+")[1] not in self.var_list :
+                        self.var_list.append(self.disas_list[start]['op_first'].strip("]").split("+")[1])
+                        chunk += "int " + str(self.disas_list[start]['op_first'].strip("]").split("+")[1]) + " = " + str(self.disas_list[start]['op_second']) + ";\n"
+                    else : chunk += "" + self.disas_list[start]['op_first'].strip("]").split("+")[1] + " = " + self.disas_list[start]['op_second'] + ";\n"
+                    chunk += self.hexray_opcodes(NextHead(start), end)
+                    return chunk
                 else :
-                    self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['op_second']
+                    if "offset" in self.disas_list[start]['op_second'] :
+                        self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['disas'].split(";")[1]
+                    else :
+                        if type(self.registers[self.disas_list[start]['op_first']]) is str and self.registers[self.disas_list[start]['op_first']][0] == "[" :
+                            chunk += self.registers[self.disas_list[start]['op_first']].split("+")[1].split("]")[0] + " = " + self.registers[self.disas_list[start]['op_first']].split("+")[1].split("]")[0] + " + " + self.disas_list[start]['op_second'].split("+")[1].split("]")[0] + ";\n"
+                            chunk += self.hexray_opcodes(NextHead(start), end)
+                            return chunk
+                        self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['op_second']
+
+        if self.disas_list[start]['instruction'] == "imul" :
+            if "offset" in self.disas_list[start]['op_second'] :
+                self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['disas'].split(";")[1]
+            else :
+                if type(self.registers[self.disas_list[start]['op_first']]) is str and self.registers[self.disas_list[start]['op_first']][0] == "[" :
+                    chunk += self.registers[self.disas_list[start]['op_first']].split("+")[1].split("]")[0] + " = " + self.registers[self.disas_list[start]['op_first']].split("+")[1].split("]")[0] + " * " + self.disas_list[start]['op_second'].split("+")[1].split("]")[0] + ";\n"
+                    chunk += self.hexray_opcodes(NextHead(start), end)
+                    return chunk
+                self.registers[self.disas_list[start]['op_first']] = self.disas_list[start]['op_second']
 
 
         if self.disas_list[start]['instruction'] == "sub" :
@@ -182,8 +202,6 @@ class Hexray():
                         argu[i] = j
 
             if fname == "_printf" :
-                sAddr = 111111
-                # GetString(sAddr)
                 chunk += fname + "(" + argu[0] + ", " + argu[1] + ");" + "\n"
             else :
                 paramCount = len(getParam(fname))
@@ -196,12 +214,6 @@ class Hexray():
                 self.registers['eax'] = fname + "(" + ",".join(v) + ")"
             chunk += self.hexray_opcodes(NextHead(start), end)
             return chunk
-
-
-
-
-
-
 
 
 
@@ -242,6 +254,9 @@ class Hexray():
 
 
         self.source_code = self.hexray_opcodes(self.hexrayStartAddrss, self.hexrayEndAddrss)
+
+        print self.registers
+
         return self.source_code
 
 

@@ -1,6 +1,6 @@
 int foo(int var_4, int var_8, int var_C)
 {
-int var_4 = 0;
-int var_8 = 0;
-int var_C = 0;
+var_8 = var_8 * var_C;
+var_8 = var_8 + var_4;
+return var_8;
 }
