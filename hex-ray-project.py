@@ -298,6 +298,27 @@ class Hexray():
                 self.registers[target_register + "_r"] = None
                 chunk += self.hexray_opcodes(NextHead(start), end)
                 return chunk
+
+            elif self.disas_list[start]['op_second'][0:1] == '[' and self.disas_list[start]['op_second'][4:5] == ']':
+                target_register = self.disas_list[start]['op_first']
+                victim_register = self.disas_list[start]['op_second'][1:4]
+                
+                print self.registers[victim_register+"_r"]
+                print self.registers[victim_register]
+                chunk += self.hexray_opcodes(NextHead(start), end)
+                return chunk
+
+            # mov eax, 상수 같은거 처리
+            elif self.disas_list[start]['op_second'] == str(self.disas_list[start]['op_second_value']):
+                target_register = self.disas_list[start]['op_first']
+
+                self.registers[target_register] = self.disas_list[start]['op_second_value']
+                self.registers[target_register + "_r"] = None
+                chunk += self.hexray_opcodes(NextHead(start), end)
+                return chunk
+
+
+            
             else:
                 print "Unknown Mov:: %s" % self.disas_list[start]['disas']
 
@@ -326,6 +347,7 @@ class Hexray():
         if self.disas_list[start]['instruction'] == 'setz':
             target_register = self.childToParentRegister(self.disas_list[start]['op_first'])
             self.registers[target_register] = self.eflags['zf']
+            print "Set ZF to %d -> %s" % (self.eflags['zf'], target_register)
             
             chunk += self.hexray_opcodes(NextHead(start), end)
             return chunk
@@ -368,6 +390,13 @@ class Hexray():
         if self.disas_list[start]['instruction'] == 'lea':
             target_register = self.disas_list[start]['op_first']
             victim_register = self.disas_list[start]['op_second'][1:4]
+            if victim_register != 'ebp' and self.registers[victim_register + "_r"] == 'ebp':
+                self.registers[target_register] = self.registers[victim_register] + self.disas_list[start]['op_second_value']
+                self.registers[target_register + "_r"] = 'ebp'
+                chunk += self.hexray_opcodes(NextHead(start), end)
+                return chunk
+
+            
             #print "victim_register is %s" % victim_register
 
             # 레지스터 변수 설정
@@ -384,7 +413,7 @@ class Hexray():
             
             if self.IsRegister(victim_register):
                 # 레지스터끼리 더하는 연산
-                self.registers[victim_register]
+                self.registers[target_register] += self.registers[victim_register]
                 #print "add:: %s register to %d" % (target_register, self.registers[target_register])
             else:
                 # 레지스터에 상수 더하기
